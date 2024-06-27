@@ -1,0 +1,449 @@
+import pandas as pd
+import shopify
+import os
+import pymysql
+import sys
+import datetime
+from datetime import *
+from PyQt5 import *
+from PyQt5 import QtWidgets
+from PyQt5.QtGui import *
+from datetime import date
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from PyQt5.QtWidgets import *
+from PyQt5.uic import *
+from PyQt5.QtCore import Qt
+
+'''
+Token = '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'
+
+
+host = 'localhost'
+user = 'root'
+password = '1234'
+database = 'bodyboost'
+
+connection = pymysql.connect(host=host, user=user, password=password, database=database)
+
+cursor = connection.cursor()
+'''
+token = os.getenv('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')
+merchant = os.getenv('Bodyboost')
+
+
+api_session = shopify.Session('d7f705-3.myshopify.com', '2024-01', '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')
+shopify.ShopifyResource.activate_session(api_session)
+shop = shopify.Shop.current()
+
+print(shop)
+def get_data(object_name):
+    all_data =[]
+    atribute = getattr(shopify, object_name)
+    data = atribute.find(status = "any", limit =250)
+    for d in data:
+        all_data.append(d)
+    if data.has_next_page():
+        for d in data:
+            all_data.append(d)
+    return all_data
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super(MainWindow, self).__init__()
+        loadUi('ingreso_datos.ui', self)
+        self.connection = None
+        self.button_connect.clicked.connect(self.connect_to_database)
+        self.setWindowIcon(QIcon('fotobodyboost.png'))
+        self.setWindowTitle('Ingreso')
+        self.setStyleSheet("background-image: url(fotobodyboost2.png);")
+        self.text_password.setEchoMode(QtWidgets.QLineEdit.Password)
+    def connect_to_database(self):
+        host = self.text_host.text()
+        user = self.text_user.text()
+        password = self.text_password.text()
+        try:
+            self.connection = pymysql.connect(host = host, user = user, password = password, database = 'bodyboost')
+            QMessageBox.information(self, 'Success', 'Connected to DB!')
+            self.query_window = MenuWindow(self, self.connection)
+            self.query_window.show()
+            self.hide()
+        except pymysql.MySQLError as e:
+            QMessageBox.critical(self, 'Connection ERROR', str(e))
+
+class MenuWindow(QDialog):
+    def __init__(self, main_window, connection):
+        super().__init__()
+        loadUi('menu.ui', self)
+        self.main_window = main_window
+        self.connection = connection
+        self.setWindowIcon(QIcon('fotobodyboost.png'))
+        self.setWindowTitle('Menu')
+        # Combo
+
+        #Boton para volver al menu principal
+        self.menu_volver.clicked.connect(self.return_to_main)
+        #Boton para ir a inventario
+        self.menu_inventario.clicked.connect(self.inventario)
+        #Boton para inserta un estadio
+        self.menu_actualizar.clicked.connect(self.insert_query)
+        #Boton para ir a margenes
+        self.menu_margenes.clicked.connect(self.margenes)
+        #Boton para ir a ordenes
+        self.menu_orden.clicked.connect(self.ordenes)
+
+    def insert_query(self):
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        data = pd.DataFrame(ordenes_atri(get_data('Order')))
+        queries = []
+        print(data)
+        for index,i in data.iterrows():
+            insert_query = 'INSERT INTO orden values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'
+            print((i[42], i[0], str(i[79]), datetime.fromisoformat(i[15]), int(i[17]), i[32], str(i[86]), int(i[25]), int(i[20]), int(i[23]), i[46], i[52]))
+            try:
+                with self.connection.cursor() as cursor:
+                    if i[46] != []:
+                        cursor.execute(insert_query, (i[42], str(i[0]), str(i[79]), datetime.fromisoformat(i[15]), int(i[17]), i[32], str(i[86]), int(i[25]), int(i[20]), int(i[23]), i[46][0], str(i[52])))
+                        self.connection.commit()
+                    else:
+                        cursor.execute(insert_query, (i[42], str(i[0]), str(i[79]), datetime.fromisoformat(i[15]), int(i[17]), i[32], str(i[86]), int(i[25]), int(i[20]), int(i[23]), "", str(i[52])))
+                        self.connection.commit()
+
+            except pymysql.MySQLError as e:
+                a = 0
+        QApplication.restoreOverrideCursor()
+    def return_to_main(self):
+        self.main_window.show()
+        self.close()
+    def inventario(self):
+        self.query_window = InvenWindow(self, self.connection)
+        self.query_window.show()
+        self.hide()
+
+    def margenes(self):
+        self.query_window = MargenWindow(self, self.connection)
+        self.query_window.show()
+        self.hide()
+
+    def ordenes(self):
+        self.query_window = OrdenWindow(self, self.connection)
+        self.query_window.show()
+        self.hide()
+
+
+class InvenWindow(QDialog):
+    def __init__(self, main_window, connection):
+        super().__init__()
+        loadUi('Inventario.ui', self)
+        self.main_window = main_window
+        self.connection = connection
+        self.setWindowIcon(QIcon('fotobodyboost.png'))
+        self.setWindowTitle('Inventario')
+        self.execute_queri()
+        # Combo
+        self.inv_boton_stock.clicked.connect(self.update_data)
+        self.inv_volver.clicked.connect(self.volver_menu)
+        self.inv_boton_borrar_prod.clicked.connect(self.borrar)
+    def borrar(self):
+        if not self.connection:
+            QMessageBox.critical(self, 'Error', 'No database Connection')
+            return
+        producto = self.inv_text_IDprod.text()
+        if not (producto):
+            QMessageBox.critical(self, "Error", "Deben llenarse todos los campos")
+            return
+        delete_inv = "DELETE FROM stock WHERE producto = %s"
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute(delete_inv, (producto))
+                self.connection.commit()
+                QMessageBox.information(self, "Exito", "Se elimino el producto")
+        except pymysql.MySQLError as e:
+            QMessageBox.critical(self, "Error en Borrar", str(e))
+        self.execute_queri
+    def execute_queri(self):
+        if not self.connection:
+            QMessageBox.critical(self, 'Error', 'No database Connection')
+            return
+
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM stock")
+                results = cursor.fetchall()
+                print(results)
+                self.display_results(results)
+        except pymysql.MySQLError as e:
+            QMessageBox.critical(self, 'Query Error', str(e))
+    def display_results(self, results):
+        self.inv_table.setRowCount(len(results))
+        self.inv_table.setColumnCount(len(results[0]) if results else 0)
+        for i, row in enumerate(results):
+            for j, item in enumerate(row):
+                self.inv_table.setItem(i,j, QTableWidgetItem(str(item)))
+
+    def volver_menu(self):
+        self.main_window.show()
+        self.close()
+
+    def update_data(self):
+        producto = self.inv_text_IDprod.text()
+        stock = self.inv_text_stock.text()
+        if not (producto and stock):
+            QMessageBox.critical(self, "Error", "Deben llenarse todos los campos")
+            return
+        update_inv = "UPDATE stock SET stock = %s where producto = %s"
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute(update_inv, (stock, producto))
+                self.connection.commit()
+                QMessageBox.information(self, "Exito", "Se actualizaró el stock del producto")
+        except pymysql.MySQLError as e:
+            QMessageBox.critical(self, "Error en Actualizar", str(e))
+        self.execute_queri
+
+class Mod_ordenes(QDialog):
+    def __init__(self, main_window,connection):
+        super().__init__()
+        loadUi("agreg_ord.ui", self)
+        self.main_window = main_window
+        self.connection = connection
+        self.menu = self
+
+        self.modif_agregar.clicked.connect(self.agregar)
+        self.mod_volver.clicked.connect(self.volver_inicio)
+
+
+    def agregar(self):
+        Orden_id = self.Orden_ID.text()
+        Orden_shopi = self.orden_shop.text()
+        cliente_ID = self.cliente_id.text()
+        fecha = datetime.strptime(self.fecha.text(), "%d-%m-%Y").date()
+        descuento = self.descuento.text()
+        metodo = self.metodo_pago.text()
+        Subtotal = self.subtotal.text()
+        Estado = self.estado.text()
+        Metodos_entrega = self.metodo_entrega.text()
+        Taxes = self.taxes.text()
+        Total = self.total.text()
+        Marketing = self.marketing.text()
+        insert_query = 'INSERT INTO orden values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'
+        print((Orden_id, Orden_shopi, str(cliente_ID), fecha, int(Subtotal), Estado, str(Metodos_entrega), int(Taxes),
+               int(descuento), int(Total), metodo, Marketing))
+        try:
+            with self.connection.cursor() as cursor:
+
+                    cursor.execute(insert_query, (Orden_id, Orden_shopi, str(cliente_ID), fecha, int(Subtotal), Estado, str(Metodos_entrega), int(Taxes),
+               int(descuento), int(Total), metodo, Marketing))
+                    self.connection.commit()
+            QMessageBox.information(self, "Exito", "Se agrego la Orden")
+
+        except pymysql.MySQLError as e:
+            QMessageBox.critical(self, 'Query Error', str(e))
+
+    def volver_inicio(self):
+        self.main_window.show()
+        self.close
+
+
+
+class MargenWindow(QDialog):
+    def __init__(self, main_window, connection):
+
+        super().__init__()
+        loadUi('margen.ui', self)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.main_window = main_window
+        self.connection = connection
+        self.setWindowIcon(QIcon('fotobodyboost.png'))
+        self.setWindowTitle('Margen y KPI')
+        # Encontrar el widget donde se mostrará el gráfico
+        self.graphWidget = self.findChild(QtWidgets.QWidget, 'graphWidget')
+        self.margen_volver.clicked.connect(self.volver_menu)
+        self.margen_visualizar.clicked.connect(self.calculo_precio_promedio)
+        # Crear un canvas de Matplotlib y añadirlo al widget
+        self.canvas = FigureCanvas(Figure())
+        layout = QtWidgets.QVBoxLayout(self.graphWidget)
+        layout.addWidget(self.canvas)
+
+        # Crear una figura y añadir un gráfico de barras
+        self.plot()
+
+        self.show()
+        QApplication.restoreOverrideCursor()
+    def fetch_orders(self, start_time, end_time):
+        start_time_iso = start_time.isoformat()
+        end_time_iso = end_time.isoformat()
+        orders = shopify.Order.find(status='any', created_at_min=start_time_iso, created_at_max=end_time_iso)
+        return orders
+
+    def calculate_profits_by_fortnight(self):
+        profits = []
+        start_date = date(2024, 1, 1)
+        for i in range((date.today().isocalendar()[1] - start_date.isocalendar()[1]) // 2):  # 26 quincenas en un año
+            end_date = start_date + timedelta(days=14)
+            orders = self.fetch_orders(start_date, end_date)
+            total_sales = sum(float(order.total_price) for order in orders)
+
+            economic_profit = total_sales
+            profits.append(economic_profit)
+            start_date = end_date + timedelta(days=1)
+        return profits
+
+    def plot(self):
+        # Obtener el eje de la figura
+        ax = self.canvas.figure.add_subplot()
+
+        # Calcular beneficios quincenales
+        profits = self.calculate_profits_by_fortnight()
+        start_date = date(2024, 1, 1)
+        quincenas = [f'Q{i + 1}' for i in range((date.today().isocalendar()[1] - start_date.isocalendar()[1]) // 2)]
+
+        ax.bar(quincenas, profits)
+
+        ax.set_xlabel('Quincenas')
+        ax.set_ylabel('Beneficios ($)')
+        ax.set_title('Beneficios Quincenales del 2024')
+        ax.tick_params(axis='x', rotation=45)
+
+        self.canvas.draw()
+
+    def fetch_orders(self, start_time, end_time):
+        start_time_iso = start_time.isoformat()
+        end_time_iso = end_time.isoformat()
+        orders = shopify.Order.find(status='any', created_at_min=start_time_iso, created_at_max=end_time_iso)
+        return orders
+
+    def calculo_precio_promedio(self):
+        end_date = datetime.now()
+        start_date = end_date - timedelta(weeks=2)
+        orders = self.fetch_orders(start_date, end_date)
+
+        if not orders:
+            return 0  # If there are no orders, return 0 to avoid division by zero
+
+        total_price = sum(float(order.total_price) for order in orders)
+        average_price = total_price // len(orders)
+        self.KPI.setText("$"+str(average_price))
+
+    # Combo
+    def volver_menu(self):
+        self.main_window.show()
+        self.close()
+
+
+class OrdenWindow(QDialog):
+    def __init__(self, main_window, connection):
+        super().__init__()
+        loadUi('orden.ui', self)
+        self.main_window = main_window
+        self.connection = connection
+        self.setWindowIcon(QIcon('fotobodyboost.png'))
+        self.setWindowTitle('Ordenes')
+        self.orden_visualizar.clicked.connect(self.execute_query)
+        self.orden_buscar.clicked.connect(self.execute_query2)
+        self.orden_volver.clicked.connect(self.volver_menu)
+        self.orden_buscar_2.clicked.connect(self.modificar)
+
+    def execute_query(self):
+        if not self.connection:
+            QMessageBox.critical(self, 'Error', 'No database Connection')
+            return
+
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM Orden")
+                results = cursor.fetchall()
+                print(results)
+                self.display_results(results)
+        except pymysql.MySQLError as e:
+            QMessageBox.critical(self, 'Query Error', str(e))
+    def display_results(self, results):
+        self.orden_table.setRowCount(len(results))
+        self.orden_table.setColumnCount(len(results[0]) if results else 0)
+        for i, row in enumerate(results):
+            for j, item in enumerate(row):
+                self.orden_table.setItem(i,j, QTableWidgetItem(str(item)))
+
+    def execute_query2(self):
+        if not self.connection:
+            QMessageBox.critical(self, 'Error', 'No database Connection')
+            return
+
+        try:
+            text = self.orden_orden.text()
+            with self.connection.cursor() as cursor:
+                cursor.execute(f"SELECT * FROM Orden WHERE ORDEN_ID ={text}")
+                results = cursor.fetchall()
+
+                self.display_results(results)
+        except pymysql.MySQLError as e:
+            QMessageBox.critical(self, 'Query Error', str(e))
+
+
+    def volver_menu(self):
+        self.main_window.show()
+        self.close()
+
+    def modificar(self):
+        self.query_window = Mod_ordenes(self, self.connection)
+        self.query_window.show()
+        self.hide()
+
+
+def ordenes_atri(ordenes):
+    data = []
+    for i in ordenes:
+        data.append(atributos(i))
+    return data
+
+
+def atributos(ordenes):
+    atri = ordenes.attributes
+    atributos = []
+    for i in atri:
+        atributos.append(atri[i])
+    return atributos
+
+
+def nombre_columnas(ordenes):
+    columnas = []
+    orden = ordenes[0]
+    atri = orden.attributes
+    for i in atri:
+        columnas.append(i)
+
+class menu(QDialog):
+    def _init_(self, main_window,connection):
+        super()._init_()
+        loadUi("menu.ui", self)
+        self.main_window = main_window
+        self.connection = connection
+        self.menu = self
+
+        self.menu_actualizar.clicked.connect(self.descargar_web)
+        self.menu_inventario.clicked.connect(self.inventario_ventana)
+        self.menu_margenes.clicked.connect(self.margenes_ventana)
+        self.menu_orden.clicked.connect(self.orden_ventana)
+        self.menu.volver.clicked.connect(self.volver_inicio)
+
+    def descargar_web(self):
+        a = 0
+    def inventario_ventana(self):
+        self.menu.show
+        self.hide()
+    def margenes_ventana(self):
+        self.menu.show()
+        self.hide()
+    def orden_ventana(self):
+        self.menu.show()
+        self.hide()
+    def volver_inicio(self):
+        self.main_window.show()
+        self.close
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    main_window = MainWindow()
+    main_window.show()
+    sys.exit(app.exec_())
+
